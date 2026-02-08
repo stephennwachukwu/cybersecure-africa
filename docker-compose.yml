@@ -1,0 +1,103 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: cybersecure_db
+    environment:
+      POSTGRES_DB: cybersecure
+      POSTGRES_USER: cyberuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cyberpass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cybersecure_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyberuser -d cybersecure"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build: ./backend
+    container_name: cybersecure_backend
+    environment:
+      DATABASE_URL: postgresql://cyberuser:${DB_PASSWORD:-cyberpass}@db:5432/cybersecure
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      FROM_EMAIL: ${FROM_EMAIL:-noreply@cybersecureafrica.org}
+      BASE_URL: ${BASE_URL:-http://localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - cybersecure_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # React Frontend
+  frontend:
+    build: ./frontend
+    container_name: cybersecure_frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost/api}
+    depends_on:
+      - backend
+    networks:
+      - cybersecure_network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: cybersecure_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_data:/var/www/certbot:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - cybersecure_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Certbot for SSL certificates
+  certbot:
+    image: certbot/certbot:latest
+    container_name: cybersecure_certbot
+    volumes:
+      - certbot_data:/var/www/certbot
+      - ./nginx/ssl:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - cybersecure_network
+
+volumes:
+  postgres_data:
+    driver: local
+  certbot_data:
+    driver: local
+
+networks:
+  cybersecure_network:
+    driver: bridge

@@ -1,0 +1,110 @@
+version: '3.9'
+
+# Production deployment using pre-built images from GitHub Container Registry or Docker Hub
+# This file is used by GitHub Actions for automated deployment
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: cybersecure-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cybersecure}
+      POSTGRES_USER: ${POSTGRES_USER:-cyberuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cybersecure-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cyberuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    # Use pre-built image from GitHub Container Registry
+    image: ${BACKEND_IMAGE:-ghcr.io/yourusername/cybersecure-africa-backend:latest}
+    # OR use Docker Hub: ${DOCKER_USERNAME}/cybersecure-backend:latest
+    container_name: cybersecure-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cyberuser}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-cybersecure}
+      ENVIRONMENT: production
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      FROM_EMAIL: ${FROM_EMAIL}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - cybersecure-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    # Use pre-built image from GitHub Container Registry
+    image: ${FRONTEND_IMAGE:-ghcr.io/yourusername/cybersecure-africa-frontend:latest}
+    # OR use Docker Hub: ${DOCKER_USERNAME}/cybersecure-frontend:latest
+    container_name: cybersecure-frontend
+    depends_on:
+      - backend
+    networks:
+      - cybersecure-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: cybersecure-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_data:/var/www/certbot:ro
+      - certbot_conf:/etc/letsencrypt:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - cybersecure-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: cybersecure-certbot
+    volumes:
+      - certbot_data:/var/www/certbot
+      - certbot_conf:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - cybersecure-network
+
+volumes:
+  postgres_data:
+  certbot_data:
+  certbot_conf:
+
+networks:
+  cybersecure-network:
+    driver: bridge

@@ -1,0 +1,77 @@
+version: '3.9'
+
+# Development configuration - simpler setup without nginx/SSL
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: cybersecure-db-dev
+    environment:
+      POSTGRES_DB: cybersecure
+      POSTGRES_USER: cyberuser
+      POSTGRES_PASSWORD: cyberpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - cybersecure-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyberuser"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cybersecure-backend-dev
+    environment:
+      DATABASE_URL: postgresql://cyberuser:cyberpass@db:5432/cybersecure
+      ENVIRONMENT: development
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:3000
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      FROM_EMAIL: ${FROM_EMAIL:-noreply@cybersecureafrica.org}
+      FRONTEND_URL: http://localhost:5173
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app  # Hot reload
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - cybersecure-dev
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # React Frontend (development mode)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: cybersecure-frontend-dev
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src  # Hot reload
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - cybersecure-dev
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_dev_data:
+
+networks:
+  cybersecure-dev:
+    driver: bridge
